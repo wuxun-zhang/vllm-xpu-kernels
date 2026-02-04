@@ -486,8 +486,6 @@ class ReduceSplitK {
         max_logits_slm_array;
     cutlass::Array<ElementLSE, FMHAKernel_::max_num_kv_splits>
         exp_sums_slm_array;
-    cutlass::Array<ElementLSE, FMHAKernel_::max_num_kv_splits>
-        rescaled_exp_sums_array;
   };
 
   static constexpr int SharedStorageSize =
@@ -674,41 +672,42 @@ class ReduceSplitK {
       global_max_logits =
           sycl::group_broadcast(get_work_group<1>(), global_max_logits, 0);
 
+      // double buffer for Oaccum prefetch
+      cutlass::Array<ElementLSE, 2> o_accum_buffer;
+
       // step 2: rescale Oaccum and write back to O
-      if (thr_id < num_kv_splits && thr_id * num_blocks_per_split < k_blocks) {
-        ElementLSE local_max_logit =
-            shared_storage.max_logits_slm_array[thr_id];
-        ElementLSE local_exp_sum = shared_storage.exp_sums_slm_array[thr_id];
-
-        ElementLSE rescale =
-            sycl::native::exp2(local_max_logit - global_max_logits);
-        ElementLSE rescaled_exp_sum = local_exp_sum * rescale;
-        shared_storage.rescaled_exp_sums_array[thr_id] = rescaled_exp_sum;
-
-        global_exp_sums += rescaled_exp_sum;
-      }
-      sycl::group_barrier(get_work_group<3>());
-      global_exp_sums = reduce_over_group(
-          get_work_group<1>(), global_exp_sums, sycl::plus<>());
-      global_exp_sums =
-          sycl::group_broadcast(get_work_group<1>(), global_exp_sums, 0);
-
-      ElementLSE inv_global_exp_sums = 1. / global_exp_sums;
       for (int idx = thr_id; idx < s.head_size_vo;
            idx += SGPerWG::value * intel::sg_size) {
         ElementLSE acc = 0;
-        for (int i = 0; i < num_kv_splits; ++i) {
+        ElementLSE global_exp_sums{0};
+        o_accum_buffer[0] = static_cast<ElementLSE>(
+            Oaccum(seq_idx, idx, 0 * num_heads_q + head_q, l_coord));
+
+#pragma unroll
+        for (int i = 0; i < FMHAKernel_::max_num_kv_splits; ++i) {
           if (i * num_blocks_per_split >= k_blocks) {
             break;
           }
-          // assume seq_len_q == 1
-          ElementLSE adjusted_o_accum =
-              static_cast<ElementLSE>(
-                  Oaccum(seq_idx, idx, i * num_heads_q + head_q, l_coord)) *
-              shared_storage.rescaled_exp_sums_array[i];
-          acc += adjusted_o_accum;
+          // prefetch next o_accum
+          o_accum_buffer[(i + 1) & 1] = static_cast<ElementLSE>(
+              Oaccum(seq_idx, idx, (i + 1) * num_heads_q + head_q, l_coord));
+
+          ElementLSE local_max_logit = shared_storage.max_logits_slm_array[i];
+          ElementLSE local_exp_sum = shared_storage.exp_sums_slm_array[i];
+
+          ElementLSE rescale =
+              sycl::native::exp2(local_max_logit - global_max_logits);
+
+          // in FMHA epilogue, it's divided by local_exp_sum, here we multiply
+          // back
+          auto rescaled_local_exp_sum = local_exp_sum * rescale;
+          acc += o_accum_buffer[i & 1] * rescaled_local_exp_sum;
+
+          // update global exp sum
+          global_exp_sums += rescaled_local_exp_sum;
         }
 
+        ElementLSE inv_global_exp_sums = 1. / global_exp_sums;
         acc *= inv_global_exp_sums;
         O(seq_idx, idx, head_q, l_coord) = static_cast<ElementO>(acc);
       }
