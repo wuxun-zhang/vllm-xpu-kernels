@@ -172,12 +172,16 @@ def benchmark_decode_with_paged_kv(seq_lens, num_heads, head_size, block_size,
     ]
 
     if provider == "flash":
+        start_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
+        end_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
         for index in range(iterations):
             block_tables = torch.randint(0,
                                          num_blocks,
                                          (num_seqs, max_num_blocks_per_seq),
                                          dtype=torch.int32)
-            start.record()
+            if index >= 5:
+                start_event_list[index-5].record()
+            # start.record()
             flash_attn_varlen_func(queries[index],
                                    maybe_quantized_key_cache,
                                    maybe_quantized_value_cache,
@@ -190,11 +194,17 @@ def benchmark_decode_with_paged_kv(seq_lens, num_heads, head_size, block_size,
                                    block_table=block_tables,
                                    window_size=(-1, -1),
                                    s_aux=sink)
-            end.record()
-            end.synchronize()
-            if index >= 5:  # skip the first 5 iterations for warmup
-                total_latency += start.elapsed_time(end)
+            if index >= 5:
+                end_event_list[index-5].record()
+            # end.record()
+            # end.synchronize()
+            # if index >= 5:  # skip the first 5 iterations for warmup
+        torch.xpu.synchronize()
+        for index in range(5, iterations):
+            total_latency += start_event_list[index-5].elapsed_time(end_event_list[index-5])
     else:
+        start_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
+        end_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
         for index in range(iterations):
             block_tables = torch.randint(0,
                                          num_blocks,
@@ -212,10 +222,12 @@ def benchmark_decode_with_paged_kv(seq_lens, num_heads, head_size, block_size,
                                                  block_table=block_tables,
                                                  window_size=(-1, -1),
                                                  s_aux=sink,
-                                                 start_event=start,
-                                                 end_event=end)
-            if index >= 5:  # skip the first 5 iterations for warmup
-                total_latency += start.elapsed_time(end)
+                                                 start_event=start_event_list[index-5] if index >= 5 else None,
+                                                 end_event=end_event_list[index-5] if index >= 5 else None)
+            # if index >= 5:  # skip the first 5 iterations for warmup
+        torch.xpu.synchronize()
+        for index in range(5, iterations):
+            total_latency += start_event_list[index-5].elapsed_time(end_event_list[index-5])
         if provider == "flash_memBandwidth":
             torch.xpu.synchronize()
             ms = total_latency / (iterations - 5)
@@ -291,14 +303,14 @@ if __name__ == "__main__":
     torch.set_default_device("xpu")
     torch.xpu.set_device("xpu:0")
 
-    configs = gen_correctness_config()
-    configs = filter_configs(configs)
-    for config in configs:
-        try:
-            calculate_diff_decode_paged_kv(config)
-        except Exception as e:
-            print("Error in config: ", config, " error: ", e)
-        clear_xpu_cache()
+    # configs = gen_correctness_config()
+    # configs = filter_configs(configs)
+    # for config in configs:
+    #     try:
+    #         calculate_diff_decode_paged_kv(config)
+    #     except Exception as e:
+    #         print("Error in config: ", config, " error: ", e)
+    #     clear_xpu_cache()
 
     configs = gen_perf_configs()
     configs = filter_configs(configs)
