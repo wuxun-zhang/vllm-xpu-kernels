@@ -17,10 +17,10 @@ from benchmark.src.get_model_config import (
 from tests.flash_attn.test_flash_attn_varlen_func import ref_paged_attn
 from tests.utils import parse_args, seed_everything
 from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func
+from benchmark.presets import get_hardware_preset
 # isort: on
 
 DEVICE = "xpu"
-
 
 def clear_xpu_cache():
     torch.xpu.empty_cache()
@@ -244,13 +244,16 @@ def benchmark_varlen_with_paged_kv(num_seqs,
     ]
 
     if is_paged:
+        start_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
+        end_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
         for index in range(iterations):
             block_tables = torch.randint(0,
                                          num_blocks,
                                          (num_seqs, max_num_blocks_per_seq),
                                          dtype=torch.int32)
             if provider == "flash_kernel_time" or \
-            provider == "flash_kernel_TFLOPS":
+            provider == "flash_kernel_TFLOPS" or \
+            provider == "flash_kernel_MFU":
                 flash_attn_varlen_func_CalKernelTime(
                     queries[index],
                     maybe_quantized_key_cache,
@@ -270,10 +273,11 @@ def benchmark_varlen_with_paged_kv(num_seqs,
                     block_table=block_tables,
                     window_size=window_size,
                     s_aux=sink,
-                    start_event=start,
-                    end_event=end)
+                    start_event=start_event_list[index-5] if index >= 5 else None,
+                    end_event=end_event_list[index-5] if index >= 5 else None)
             else:
-                start.record()
+                if index >= 5:
+                    start_event_list[index-5].record()
                 flash_attn_varlen_func(queries[index],
                                        maybe_quantized_key_cache,
                                        maybe_quantized_value_cache,
@@ -292,14 +296,18 @@ def benchmark_varlen_with_paged_kv(num_seqs,
                                        block_table=block_tables,
                                        window_size=window_size,
                                        s_aux=sink)
-                end.record()
-                end.synchronize()
-            if index >= 5:  # skip the first 5 iterations for warmup
-                total_latency += start.elapsed_time(end)
+                if index >= 5:
+                    end_event_list[index-5].record()
+        torch.xpu.synchronize()
+        for index in range(5, iterations):
+            total_latency += start_event_list[index-5].elapsed_time(end_event_list[index-5])
     else:
+        start_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
+        end_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
         for index in range(iterations):
             if provider == "flash_kernel_time" or \
-            provider == "flash_kernel_TFLOPS":
+            provider == "flash_kernel_TFLOPS" or \
+            provider == "flash_kernel_MFU":
                 flash_attn_varlen_func_CalKernelTime(
                     queries[index],
                     maybe_quantized_key_cache,
@@ -319,10 +327,11 @@ def benchmark_varlen_with_paged_kv(num_seqs,
                     block_table=None,
                     window_size=window_size,
                     s_aux=sink,
-                    start_event=start,
-                    end_event=end)
+                    start_event=start_event_list[index-5] if index >= 5 else None,
+                    end_event=end_event_list[index-5] if index >= 5 else None)
             else:
-                start.record()
+                if index >= 5:
+                    start_event_list[index-5].record()
                 flash_attn_varlen_func(queries[index],
                                        maybe_quantized_key_cache,
                                        maybe_quantized_value_cache,
@@ -341,16 +350,23 @@ def benchmark_varlen_with_paged_kv(num_seqs,
                                        block_table=None,
                                        window_size=window_size,
                                        s_aux=sink)
-                end.record()
-                end.synchronize()
-            if index >= 5:  # skip the first 5 iterations for warmup
-                total_latency += start.elapsed_time(end)
-    if provider == "flash_kernel_TFLOPS":
+                if index >= 5:
+                    end_event_list[index-5].record()
         torch.xpu.synchronize()
+        for index in range(5, iterations):
+            total_latency += start_event_list[index-5].elapsed_time(end_event_list[index-5])
+    if provider == "flash_kernel_TFLOPS" or provider == "flash_kernel_MFU":
         ms = total_latency / (iterations - 5)
         flops = calculate_flops(num_query_heads, query_lens, kv_lens,
                                 head_size, is_causal)
         tflops = flops / (ms / 1000) / 1e12
+        if provider == "flash_kernel_MFU":
+            peak_tflops = get_hardware_preset(torch.xpu.get_device_name())["tflops"]
+            if peak_tflops is None:
+                clear_xpu_cache()
+                return float("nan")
+            clear_xpu_cache()
+            return (tflops / peak_tflops) * 100
         clear_xpu_cache()
         return tflops
 
@@ -373,12 +389,16 @@ def get_benchmark_varlen_with_paged_kv(iterations=20):
             ],
             x_vals=[tuple(c) for c in configs],
             line_arg="provider",
-            line_vals=["flash", "flash_kernel_time", "flash_kernel_TFLOPS"],
+            line_vals=[
+                "flash", "flash_kernel_time", "flash_kernel_TFLOPS",
+                "flash_kernel_MFU"
+            ],
             line_names=[
                 "FlashAttention(us)", "FlashAttention_Kernel_Time(us)",
-                "FlashAttention_TFLOPS"
+                "FlashAttention_TFLOPS", "FlashAttention_MFU (%)"
             ],
-            styles=[("blue", "-"), ("green", "-"), ("purple", "-")],
+            styles=[("blue", "-"), ("green", "-"), ("purple", "-"),
+                    ("red", "-")],
             ylabel="Latency (us)",
             plot_name="flash-attn-varlen",
             args={},

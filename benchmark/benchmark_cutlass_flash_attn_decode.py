@@ -17,6 +17,7 @@ from benchmark.src.get_model_config import (
 from tests.flash_attn.test_flash_attn_varlen_func import ref_paged_attn
 from tests.utils import parse_args, seed_everything
 from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func
+from benchmark.presets import get_hardware_preset
 # isort: on
 
 DEVICE = "xpu"
@@ -172,12 +173,15 @@ def benchmark_decode_with_paged_kv(seq_lens, num_heads, head_size, block_size,
     ]
 
     if provider == "flash":
+        start_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
+        end_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
         for index in range(iterations):
             block_tables = torch.randint(0,
                                          num_blocks,
                                          (num_seqs, max_num_blocks_per_seq),
                                          dtype=torch.int32)
-            start.record()
+            if index >= 5:
+                start_event_list[index-5].record()
             flash_attn_varlen_func(queries[index],
                                    maybe_quantized_key_cache,
                                    maybe_quantized_value_cache,
@@ -190,11 +194,14 @@ def benchmark_decode_with_paged_kv(seq_lens, num_heads, head_size, block_size,
                                    block_table=block_tables,
                                    window_size=(-1, -1),
                                    s_aux=sink)
-            end.record()
-            end.synchronize()
-            if index >= 5:  # skip the first 5 iterations for warmup
-                total_latency += start.elapsed_time(end)
+            if index >= 5:
+                end_event_list[index-5].record()
+        torch.xpu.synchronize()
+        for index in range(5, iterations):
+            total_latency += start_event_list[index-5].elapsed_time(end_event_list[index-5])
     else:
+        start_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
+        end_event_list = [torch.xpu.Event(enable_timing=True) for _ in range(iterations - 5)]
         for index in range(iterations):
             block_tables = torch.randint(0,
                                          num_blocks,
@@ -212,18 +219,26 @@ def benchmark_decode_with_paged_kv(seq_lens, num_heads, head_size, block_size,
                                                  block_table=block_tables,
                                                  window_size=(-1, -1),
                                                  s_aux=sink,
-                                                 start_event=start,
-                                                 end_event=end)
-            if index >= 5:  # skip the first 5 iterations for warmup
-                total_latency += start.elapsed_time(end)
-        if provider == "flash_memBandwidth":
-            torch.xpu.synchronize()
+                                                 start_event=start_event_list[index-5] if index >= 5 else None,
+                                                 end_event=end_event_list[index-5] if index >= 5 else None)
+        torch.xpu.synchronize()
+        for index in range(5, iterations):
+            total_latency += start_event_list[index-5].elapsed_time(end_event_list[index-5])
+        if provider == "flash_memBandwidth" or provider == "flash_MBU":
             ms = total_latency / (iterations - 5)
             memory_load_GB = calculate_memory_usage(seq_k.sum().item(),
                                                     num_heads[1], head_size,
                                                     output_dtype)
+            measured_bw = memory_load_GB / (ms / 1000)
+            if provider == "flash_MBU":
+                peak_bw = get_hardware_preset(torch.xpu.get_device_name())["memory_bandwidth_gbps"]
+                if peak_bw is None:
+                    clear_xpu_cache()
+                    return float("nan")
+                clear_xpu_cache()
+                return (measured_bw / peak_bw) * 100
             clear_xpu_cache()
-            return memory_load_GB / (ms / 1000)
+            return measured_bw
     torch.xpu.synchronize()
     ms = total_latency / (iterations - 5)
     clear_xpu_cache()
@@ -242,12 +257,16 @@ def get_benchmark_decode_with_paged_kv(iterations=20):
             ],
             x_vals=[tuple(c) for c in configs],
             line_arg="provider",
-            line_vals=["flash", "flash_kernelTime", "flash_memBandwidth"],
+            line_vals=[
+                "flash", "flash_kernelTime", "flash_memBandwidth",
+                "flash_MBU"
+            ],
             line_names=[
                 "FlashAttention(us)", "FlashAttention_kernelTime(us)",
-                "FlashAttention_memBandwidth(GB/s)"
+                "FlashAttention_memBandwidth(GB/s)", "FlashAttention_MBU (%)"
             ],
-            styles=[("blue", "-"), ("green", "-"), ("purple", "-")],
+            styles=[("blue", "-"), ("green", "-"), ("purple", "-"),
+                    ("red", "-")],
             ylabel="Latency (us)",
             plot_name="flash-attn-decode",
             args={},

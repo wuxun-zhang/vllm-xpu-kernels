@@ -13,7 +13,6 @@ model_lists = [
     "deepseek-ai/DeepSeek-V2-Lite"
 ]
 
-
 def gen_cutlass_fused_moe_correctness_configs():
     mnk = [
         (1, 5120, 8192),
