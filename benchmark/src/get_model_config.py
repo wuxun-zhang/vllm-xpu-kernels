@@ -13,7 +13,6 @@ model_lists = [
     "deepseek-ai/DeepSeek-V2-Lite", "Qwen/Qwen3.5-35B-A3B", "Qwen/Qwen3-32B",
 ]
 
-
 def gen_cutlass_fused_moe_correctness_configs():
     mnk = [
         (1, 5120, 8192),
@@ -143,21 +142,33 @@ def gen_cutlass_flash_attn_varlen_correctness_configs():
     return configs
 
 
-def gen_cutlass_flash_attn_varlen_perf_configs():
-    num_seqs = [4]
-    query_lens = ["1024,2048,2048,8192"]
-    kv_lens = ["1024,1024,2048,8192"]
+def gen_cutlass_flash_attn_varlen_perf_configs(args):
+    # num_seqs = [4]
+    # query_lens = ["1024,2048,2048,8192"]
+    # kv_lens = ["1024,1024,2048,8192"]
+    seq_lens = [args.bench_seq_lens]
 
-    block_size = [64, 128]
+    num_seqs = [int(seq_lens[0].split(",")[0])]
+    query_lens = [",".join(seq_lens[0].split(",")[1].split("+"))]
+    kv_lens = [",".join(seq_lens[0].split(",")[2].split("+"))]
+
+    assert num_seqs[0] == seq_lens[0].split(",")[1].count("+") + 1 == seq_lens[0].split(",")[2].count("+") + 1, "num_seqs, query_lens and kv_lens should be consistent"
+
+    # block_size = [64, 128]
+    block_size = [args.block_size]
     window_size = [(-1, -1)]
-    output_dtype = [torch.float16, torch.bfloat16]
+    # output_dtype = [torch.float16, torch.bfloat16]
+    output_dtype = [args.dtype]
     soft_cap = [None]
     num_blocks = [16324]
     fa_versions = [2]
     q_dtype = [None]
-    is_sink = [False, True]
-    is_causal = [False, True]
-    is_paged = [False, True]
+    # is_sink = [False, True]
+    # is_causal = [False, True]
+    # is_paged = [False, True]
+    is_sink = [args.use_sink]
+    is_causal = [args.use_casual_mask]
+    is_paged = [args.use_paged_kv]
     # kv_dtype = [torch.float8_e5m2, torch.float8_e4m3fn, None]     # fp8 OOM
     kv_dtype = [None]
 
@@ -213,11 +224,11 @@ def gen_cutlass_flash_attn_varlen_perf_configs():
         # no sink, no paged KV, causal and non-causal variants
         # Q/K/V shape=(1025, 8, 64), cu_seqlens_q/k=[0,1025], 
         # window_size=(-1,-1)
-        for causal in [False, True]:
-            for out_dtype in [torch.float16, torch.bfloat16]:
-                configs.append((1, "1025", "1025", (8, 8), 64, 64, (-1, -1),
-                                out_dtype, None, 2048, 2, None, False, causal,
-                                False, None))
+        # for causal in [False, True]:
+        #     for out_dtype in [torch.float16, torch.bfloat16]:
+        #         configs.append((1, "1025", "1025", (8, 8), 64, 64, (-1, -1),
+        #                         out_dtype, None, 2048, 2, None, False, causal,
+        #                         False, None))
         return configs
 
     configs = get_configs_from_models()
@@ -249,20 +260,26 @@ def gen_cutlass_flash_attn_decode_correctness_configs():
     return configs
 
 
-def gen_cutlass_flash_attn_decode_perf_configs():
-    seq_lens = [
-        "1,1,4096", "8,1+1+1+1+1+1+1+1,128+256+512+1024+2048+4096+8192+16384",
-        "32," + "+".join(["1"] * 32) + "," + "+".join(["512"] * 32)
-    ]
-    num_heads = [(4, 4), (16, 1)]
+def gen_cutlass_flash_attn_decode_perf_configs(args):
+    # seq_lens = [
+    #     "1,1,4096", "8,1+1+1+1+1+1+1+1,128+256+512+1024+2048+4096+8192+16384",
+    #     "32," + "+".join(["1"] * 32) + "," + "+".join(["512"] * 32)
+    # ]
+    seq_lens = [args.bench_seq_lens]
+    assert int(args.bench_seq_lens.split(",")[0]) == args.bench_seq_lens.split(",")[1].count("+") + 1 == args.bench_seq_lens.split(",")[2].count("+") + 1, "num_seqs, query_lens and kv_lens should be consistent"
+
+    # num_heads = [(4, 4), (16, 1)]
     head_size = [64, 128, 256]
-    block_size = [64, 128]
-    output_dtype = [torch.float16, torch.bfloat16]
+    # block_size = [64, 128]
+    block_size = [args.block_size]
+    # output_dtype = [torch.float16, torch.bfloat16]
+    output_dtype = [args.dtype]
     soft_cap = [None]
     num_blocks = [2048]
     fa_versions = [2]
     q_dtype = [None]
-    is_sink = [False, True]
+    # is_sink = [False, True]
+    is_sink = [args.use_sink]
 
     # Hardcoded attention shapes for models that cannot be loaded via
     # AutoConfig (e.g. diffusion models without a standard model_type).

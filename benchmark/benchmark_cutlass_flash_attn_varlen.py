@@ -504,17 +504,18 @@ if __name__ == "__main__":
     torch.set_default_device("xpu")
     torch.xpu.set_device("xpu:0")
 
-    configs = gen_correctness_config()
-    configs = filter_configs(configs)
+    if args.acc:
+        configs = gen_correctness_config()
+        configs = filter_configs(configs)
 
-    for config in configs:
-        try:
-            calculate_diff_varlen_paged_kv(config)
-        except Exception as e:
-            print("Error in config: ", config, " error: ", e)
-        clear_xpu_cache()
+        for config in configs:
+            try:
+                calculate_diff_varlen_paged_kv(config)
+            except Exception as e:
+                print("Error in config: ", config, " error: ", e)
+            clear_xpu_cache()
 
-    configs = gen_perf_configs()
+    configs = gen_perf_configs(args)
     configs = filter_configs(configs)
     benchmark = get_benchmark_varlen_with_paged_kv(iterations=iterations)
     save_path = ensure_save_path_exists(args.save_path)

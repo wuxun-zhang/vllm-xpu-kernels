@@ -562,6 +562,18 @@ def parse_args():
         help="Path to save rmsnorm benchmark results",
     )
 
+    parser.add_argument("--acc", action="store_true", default=False, help="Accuracy mode")
+    parser.add_argument("--bench-seq-lens", type=str, help="Comma-separated sequence lengths for benchmarking, e.g. '2,128+512,1024+1024'")
+    parser.add_argument("--use-sink",
+                        action="store_true",
+                        help="Whether to use sink mode")
+    parser.add_argument("--use-casual-mask",
+                        action="store_true",
+                        help="Whether to use casual mask")
+    parser.add_argument("--use-paged-kv",
+                        action="store_true",
+                        help="Whether to use paged KV")
+
     args = parser.parse_args()
 
     if args.model_name:
