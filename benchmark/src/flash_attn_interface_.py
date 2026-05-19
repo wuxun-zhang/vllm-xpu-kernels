@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
+import os
 from typing import Optional
 
 import torch
+from flash_attn.flash_attn_interface_xpu import flash_attn_with_kvcache
 
 #isort: off
 try:
@@ -131,7 +133,24 @@ def flash_attn_varlen_func_CalKernelTime(
 
         if start_event is not None:
             start_event.record()
-        out, softmax_lse = torch.ops._vllm_fa2_C.varlen_fwd(
+        if os.getenv("VLLM_XPU_USE_CUSTOM_ATTENTION", "0") == "1":
+            out, softmax_lse, *_ = flash_attn_with_kvcache(
+                q,
+                k,
+                v,
+                cache_seqlens=seqused_k,
+                cu_seqlens_q=cu_seqlens_q,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                num_splits=num_splits,
+                page_table=block_table,
+                sinks=s_aux,
+                causal=False,
+                softmax_scale=softmax_scale,
+                return_softmax_lse=True,
+            )
+        else:
+            out, softmax_lse = torch.ops._vllm_fa2_C.varlen_fwd(
             q,
             k,
             v,
@@ -156,10 +175,10 @@ def flash_attn_varlen_func_CalKernelTime(
             real_window_size[0],
             real_window_size[1],
             softcap,
-            return_softmax_lse and dropout_p > 0,
+            return_softmax_lse,
             None,
             num_splits_kv,
-            is_mix_batch,
+            # is_mix_batch,
         )
         if end_event is not None:
             end_event.record()

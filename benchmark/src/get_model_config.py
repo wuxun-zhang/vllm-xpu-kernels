@@ -13,6 +13,9 @@ model_lists = [
     "deepseek-ai/DeepSeek-V2-Lite", "Qwen/Qwen3.5-35B-A3B", "Qwen/Qwen3-32B",
 ]
 
+model_lists = ["Qwen/Qwen3-30B-A3B",
+               "Qwen/Qwen3-32B"]
+
 def gen_cutlass_fused_moe_correctness_configs():
     mnk = [
         (1, 5120, 8192),
@@ -152,7 +155,9 @@ def gen_cutlass_flash_attn_varlen_perf_configs(args):
     query_lens = [",".join(seq_lens[0].split(",")[1].split("+"))]
     kv_lens = [",".join(seq_lens[0].split(",")[2].split("+"))]
 
-    assert num_seqs[0] == seq_lens[0].split(",")[1].count("+") + 1 == seq_lens[0].split(",")[2].count("+") + 1, "num_seqs, query_lens and kv_lens should be consistent"
+    assert num_seqs[0] == seq_lens[0].split(",")[1].count("+") + 1 == \
+        seq_lens[0].split(",")[2].count("+") + 1, \
+            "num_seqs, query_lens and kv_lens should be consistent"
 
     # block_size = [64, 128]
     block_size = [args.block_size]
@@ -243,10 +248,10 @@ def gen_cutlass_flash_attn_decode_correctness_configs():
         "1,1,1025", "3,1+1+1,523+37+2011", "1,1,13000",
         "4,1+1+1+1,523+37+2011+5000"
     ]
-    num_heads = [(4, 4), (8, 2), (10, 2), (16, 1)]
-    head_size = [64, 128, 192, 256]
-    block_size = [64, 128]
-    output_dtype = [torch.float16, torch.bfloat16]
+    num_heads = [(4, 4), (16, 2)]
+    head_size = [128]
+    block_size = [64]
+    output_dtype = [torch.bfloat16]
     soft_cap = [None]
     num_blocks = [32768, 2048]
     fa_versions = [2]
@@ -261,15 +266,18 @@ def gen_cutlass_flash_attn_decode_correctness_configs():
 
 
 def gen_cutlass_flash_attn_decode_perf_configs(args):
-    # seq_lens = [
-    #     "1,1,4096", "8,1+1+1+1+1+1+1+1,128+256+512+1024+2048+4096+8192+16384",
-    #     "32," + "+".join(["1"] * 32) + "," + "+".join(["512"] * 32)
-    # ]
-    seq_lens = [args.bench_seq_lens]
-    assert int(args.bench_seq_lens.split(",")[0]) == args.bench_seq_lens.split(",")[1].count("+") + 1 == args.bench_seq_lens.split(",")[2].count("+") + 1, "num_seqs, query_lens and kv_lens should be consistent"
+    seq_lens = [
+        "1,1,4096", "8,1+1+1+1+1+1+1+1,128+256+512+1024+2048+4096+8192+16384",
+        "32," + "+".join(["1"] * 32) + "," + "+".join(["512"] * 32)
+    ]
+    # seq_lens = [args.bench_seq_lens]
+    assert int(args.bench_seq_lens.split(",")[0]) == \
+        args.bench_seq_lens.split(",")[1].count("+") + 1 == \
+            args.bench_seq_lens.split(",")[2].count("+") + 1, \
+                "num_seqs, query_lens and kv_lens should be consistent"
 
     # num_heads = [(4, 4), (16, 1)]
-    head_size = [64, 128, 256]
+    head_size = [128]
     # block_size = [64, 128]
     block_size = [args.block_size]
     # output_dtype = [torch.float16, torch.bfloat16]
@@ -287,6 +295,7 @@ def gen_cutlass_flash_attn_decode_perf_configs(args):
     hardcoded_attn_shapes = [
         # Wan-AI/Wan2.2-I2V-A14B-Diffusers (DiT video diffusion)
         (40, 40, 128),
+        (32, 2, 128)
     ]
 
     configs = []

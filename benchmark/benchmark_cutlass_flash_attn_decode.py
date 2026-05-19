@@ -354,10 +354,10 @@ if __name__ == "__main__":
             except Exception as e:
                 print("Error in config: ", config, " error: ", e)
             clear_xpu_cache()
-
-    configs = gen_perf_configs(args)
-    configs = filter_configs(configs)
-    benchmark = get_benchmark_decode_with_paged_kv(iterations=iterations)
-    save_path = ensure_save_path_exists(args.save_path)
-    # Run performance benchmark
-    benchmark.run(print_data=True, save_path=save_path)
+    else:
+        configs = gen_perf_configs(args)
+        configs = filter_configs(configs)
+        benchmark = get_benchmark_decode_with_paged_kv(iterations=iterations)
+        save_path = ensure_save_path_exists(args.save_path)
+        # Run performance benchmark
+        benchmark.run(print_data=True, save_path=save_path)
